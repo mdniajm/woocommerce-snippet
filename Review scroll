@@ -1,0 +1,138 @@
+(function () {
+  /* -------- utilities -------- */
+
+  // Wait until Astra's accordion/tabs exist (handles lazy rendering)
+  function whenTabsReady(cb) {
+    if (document.querySelector('.ast-woocommerce-accordion, .ast-woocommerce-tabs')) return cb();
+    const mo = new MutationObserver(() => {
+      if (document.querySelector('.ast-woocommerce-accordion, .ast-woocommerce-tabs')) {
+        mo.disconnect();
+        cb();
+      }
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  // Current sticky header/adminbar height for offset
+  function getStickyOffset() {
+    let offset = 0;
+
+    const adminBar = document.querySelector('#wpadminbar');
+    if (adminBar && getComputedStyle(adminBar).position === 'fixed') {
+      offset += adminBar.offsetHeight;
+    }
+
+    // adjust selectors if your theme uses a different sticky header wrapper
+    const header = document.querySelector('.site-header, .main-header-bar');
+    if (header && ['fixed', 'sticky'].includes(getComputedStyle(header).position)) {
+      offset += header.offsetHeight;
+    }
+
+    return offset + 8; // small breathing room
+  }
+
+  // Find the Reviews panel and its header in Astra
+  function getReviewsNodes() {
+    const content =
+      document.querySelector('.woocommerce-Tabs-panel--reviews, #tab-reviews');
+    if (!content) return {};
+    const header =
+      content.previousElementSibling && content.previousElementSibling.classList.contains('ast-accordion-header')
+        ? content.previousElementSibling
+        : document.querySelector('#tab-title-reviews, [aria-controls="tab-reviews"]');
+    return { header, content };
+  }
+
+  // Open reviews tab and scroll AFTER its height settles (fixes first-click glitch)
+  function openReviewsAndScroll() {
+    const { header, content } = getReviewsNodes();
+    if (!header || !content) return false;
+
+    // Collapse all tabs
+    document.querySelectorAll('.ast-accordion-header').forEach(h => h.classList.remove('active'));
+    document.querySelectorAll('.ast-accordion-content').forEach(c => {
+      c.classList.remove('active');
+      c.style.display = 'none';
+      c.style.height = '0';
+    });
+
+    // Expand reviews
+    header.classList.add('active');
+    content.classList.add('active');
+    content.style.display = 'block';
+    content.style.height = 'auto';
+
+    // Scroll only after the panel height has stopped changing
+    const stickyOffset = getStickyOffset();
+    const doScroll = () => {
+      const y = header.getBoundingClientRect().top + window.pageYOffset - stickyOffset;
+      window.scrollTo({ top: y, behavior: 'smooth' });
+    };
+
+    if ('ResizeObserver' in window) {
+      let lastH = 0;
+      let settleTimer = null;
+      const ro = new ResizeObserver(entries => {
+        const h = entries[0].contentRect.height;
+        if (h !== lastH) {
+          lastH = h;
+          if (settleTimer) clearTimeout(settleTimer);
+          // consider height "settled" after 150ms without changes
+          settleTimer = setTimeout(() => {
+            ro.disconnect();
+            requestAnimationFrame(doScroll);
+          }, 150);
+        }
+      });
+      ro.observe(content);
+
+      // Safety net: if nothing changes, still scroll
+      setTimeout(() => {
+        try { ro.disconnect(); } catch (e) {}
+        requestAnimationFrame(doScroll);
+      }, 1200);
+    } else {
+      // Fallback for older browsers
+      setTimeout(doScroll, 250);
+      setTimeout(doScroll, 650);
+    }
+
+    return true;
+  }
+
+  /* -------- init -------- */
+
+  function init() {
+    const { header, content } = getReviewsNodes();
+    if (!header || !content) return; // product has no reviews tab
+
+    // Put the permalink anchor on the tab header (do not remove inner #reviews)
+    if (!header.id) header.id = 'review-items';
+
+    // Point all review links to our header anchor
+    document.querySelectorAll('a.woocommerce-review-link').forEach(a => {
+      a.setAttribute('href', '#review-items');
+    });
+
+    // Open on click (event delegation covers dynamically added links)
+    document.addEventListener('click', function (e) {
+      const a = e.target.closest('a.woocommerce-review-link, a[href="#review-items"]');
+      if (!a) return;
+      e.preventDefault();
+      openReviewsAndScroll();
+      history.replaceState(null, '', '#review-items');
+    });
+
+    // Open automatically if landing on /#review-items
+    if (location.hash === '#review-items') {
+      // Let Astra finish initial layout first
+      setTimeout(openReviewsAndScroll, 0);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => whenTabsReady(init));
+  } else {
+    whenTabsReady(init);
+  }
+})();
