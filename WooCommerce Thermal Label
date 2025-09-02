@@ -1,0 +1,268 @@
+/**
+ * WooCommerce Thermal Label — printer button + single & bulk actions
+ * - Actions column: printer icon to print one label
+ * - Single order: "Print Thermal Label" action
+ * - Bulk actions: "Print Thermal Labels" (classic & HPOS Orders screens)
+ * - Endpoints render minimal HTML labels for 58/80mm thermal printers
+ *
+ * Optional tweaks:
+ *   add_filter('wctl_paper_width_mm', fn() => 80);     // 58 or 80
+ *   add_filter('wctl_page_margin_mm', fn() => 3);
+ *   add_filter('wctl_show_prices_per_item', '__return_false'); // hide per-item price column
+ */
+
+/* ---------------- Helpers ---------------- */
+
+function wctl_get_print_url( $order_id ) {
+	$args = array(
+		'action'   => 'wctl_print_thermal_label',
+		'order_id' => (int) $order_id,
+		'_wpnonce' => wp_create_nonce( 'wctl_print_' . (int) $order_id ),
+	);
+	return add_query_arg( $args, admin_url( 'admin-post.php' ) );
+}
+function wctl_get_bulk_print_url( array $order_ids ) {
+	$ids  = array_map( 'intval', array_filter( $order_ids ) );
+	$list = implode( ',', $ids );
+	$args = array(
+		'action'    => 'wctl_bulk_print_thermal_labels',
+		'order_ids' => $list,
+		'_wpnonce'  => wp_create_nonce( 'wctl_bulk_print_' . $list ),
+	);
+	return add_query_arg( $args, admin_url( 'admin-post.php' ) );
+}
+function wctl_one_line( $text ) {
+	$text = wp_strip_all_tags( (string) $text );
+	$text = preg_replace( '/\s+/', ' ', $text );
+	return trim( $text );
+}
+
+/* ------------- Shared label renderer & CSS -------------- */
+
+function wctl_echo_one_label_block( WC_Order $order, $show_item_prices ) {
+	$company    = wctl_one_line( get_bloginfo( 'name' ) );
+	$customer   = wctl_one_line( $order->get_formatted_billing_full_name() ?: $order->get_formatted_shipping_full_name() );
+	$phone      = wctl_one_line( $order->get_billing_phone() );
+	$order_no   = $order->get_order_number();
+	$date       = wc_format_datetime( $order->get_date_created(), 'Y-m-d H:i' );
+	$total_html = $order->get_formatted_order_total();
+
+	$items = [];
+	foreach ( $order->get_items( 'line_item' ) as $item ) {
+		$items[] = [
+			'name'  => wctl_one_line( $item->get_name() ),
+			'qty'   => (float) $item->get_quantity(),
+			'total' => wc_price( $item->get_total(), [ 'currency' => $order->get_currency() ] ),
+		];
+	}
+	?>
+	<div class="label-page">
+		<div class="label-wrap">
+			<h1 class="company"><?php echo esc_html( $company ); ?></h1>
+			<p class="meta">Order #<?php echo esc_html( $order_no ); ?> • <?php echo esc_html( $date ); ?></p>
+
+			<?php if ( $customer ) : ?><p class="row"><b>Customer:</b> <?php echo esc_html( $customer ); ?></p><?php endif; ?>
+			<?php if ( $phone ) : ?><p class="row"><b>Phone:</b> <?php echo esc_html( $phone ); ?></p><?php endif; ?>
+
+			<?php if ( $items ) : ?>
+				<ul class="items">
+					<?php foreach ( $items as $it ) : ?>
+						<li>
+							<span class="name"><?php echo esc_html( $it['name'] ); ?></span>
+							<span class="qty">×<?php
+								echo esc_html(
+									(string) ( $it['qty'] == floor( $it['qty'] ) ? number_format_i18n( $it['qty'], 0 ) : $it['qty'] )
+								);
+							?></span>
+							<?php if ( $show_item_prices ) : ?>
+								<span class="price"><?php echo wp_kses_post( $it['total'] ); ?></span>
+							<?php endif; ?>
+						</li>
+					<?php endforeach; ?>
+				</ul>
+			<?php endif; ?>
+
+			<div class="total">
+				<span><?php esc_html_e( 'Total', 'woocommerce' ); ?></span>
+				<span><?php echo wp_kses_post( $total_html ); ?></span>
+			</div>
+
+			<div class="footer">Thank you!</div>
+		</div>
+	</div>
+	<?php
+}
+function wctl_echo_print_styles() {
+	$paper_width_mm   = (int) apply_filters( 'wctl_paper_width_mm', 80 ); // 58 or 80
+	$page_margin_mm   = (int) apply_filters( 'wctl_page_margin_mm', 3 );
+	$show_item_prices = (bool) apply_filters( 'wctl_show_prices_per_item', true );
+	?>
+	<style>
+	@page { size: <?php echo (int) $paper_width_mm; ?>mm auto; margin: <?php echo (int) $page_margin_mm; ?>mm; }
+	html, body { padding:0; margin:0; font:12px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; color:#000; }
+	.label-page { break-after: always; } .label-page:last-child { break-after:auto; }
+	.label-wrap{ width:<?php echo (int) $paper_width_mm; ?>mm; box-sizing:border-box; padding:0 <?php echo (int) $page_margin_mm; ?>mm; }
+	.company{ font-weight:700; font-size:14px; text-align:center; margin:0 0 6px; text-transform:uppercase; letter-spacing:.4px; }
+	.meta{ font-size:11px; text-align:center; margin:0 0 6px; }
+	.row{ margin:0 0 4px; } .row b{ font-weight:700; }
+	.items{ list-style:none; padding:0; margin:6px 0 6px; }
+	.items li{ display:flex; gap:6px; justify-content:space-between; }
+	.items .name{ flex:1 1 auto; word-break:break-word; }
+	.items .qty{ flex:0 0 auto; min-width:18px; text-align:right; }
+	.items .price{ flex:0 0 auto; text-align:right; margin-left:6px; }
+	.total{ border-top:1px dashed #000; padding-top:6px; margin-top:6px; font-size:13px; font-weight:700; display:flex; justify-content:space-between; }
+	.footer{ margin-top:6px; font-size:10px; text-align:center; }
+	@media print { .no-print{ display:none !important; } }
+	<?php if ( ! $show_item_prices ) : ?> .items .price{ display:none; } <?php endif; ?>
+	</style>
+	<?php
+}
+
+/* -------- Orders list: printer icon button (classic table) -------- */
+
+add_action( 'admin_enqueue_scripts', function(){ wp_enqueue_style( 'dashicons' ); } );
+
+add_action( 'woocommerce_admin_order_actions_end', function( $order ){
+	if ( ! $order instanceof WC_Order ) return;
+	if ( ! current_user_can( 'edit_shop_orders' ) ) return;
+
+	$url   = wctl_get_print_url( $order->get_id() );
+	$label = esc_attr__( 'Print Thermal Label', 'woocommerce' );
+
+	echo '<a href="' . esc_url( $url ) . '" target="_blank"
+		class="button wc-action-button wc-action-button-wctl-print tips"
+		aria-label="' . $label . '" data-tip="' . $label . '"></a>';
+}, 20 );
+
+add_action( 'admin_head', function () {
+	echo '<style>
+		.wc-action-button-wctl-print::after{ font-family:Dashicons; content:"\f193"; font-size:16px; line-height:26px; }
+		.column-wc_actions a.wc-action-button-wctl-print{ min-width:28px; }
+	</style>';
+});
+
+/* -------- Single order: dropdown action -------- */
+
+add_filter( 'woocommerce_order_actions', function( $actions ) {
+	$actions['wctl_print_label'] = __( 'Print Thermal Label', 'woocommerce' );
+	return $actions;
+});
+add_action( 'woocommerce_order_action_wctl_print_label', function( $order ) {
+	if ( $order instanceof WC_Order ) {
+		wp_safe_redirect( wctl_get_print_url( $order->get_id() ) );
+		exit;
+	}
+});
+
+/* -------- BULK: add to BOTH classic & HPOS Orders screens -------- */
+
+function wctl_add_bulk_action( $actions ){
+	$actions['wctl_bulk_print_labels'] = __( 'Print Thermal Labels', 'woocommerce' );
+	return $actions;
+}
+add_filter( 'bulk_actions-edit-shop_order', 'wctl_add_bulk_action', 20 );                 // classic table
+add_filter( 'bulk_actions-woocommerce_page_wc-orders', 'wctl_add_bulk_action', 20 );     // HPOS / wc-admin table
+
+function wctl_handle_bulk_action( $redirect_to, $doaction, $post_ids ){
+	if ( 'wctl_bulk_print_labels' !== $doaction ) return $redirect_to;
+	$url = wctl_get_bulk_print_url( (array) $post_ids );
+	wp_safe_redirect( $url );
+	exit;
+}
+add_filter( 'handle_bulk_actions-edit-shop_order', 'wctl_handle_bulk_action', 10, 3 );            // classic
+add_filter( 'handle_bulk_actions-woocommerce_page_wc-orders', 'wctl_handle_bulk_action', 10, 3 ); // HPOS
+
+/* --- Fallback: if some UI strips our option, inject it with JS (classic table only) --- */
+add_action( 'admin_footer-edit.php', function () {
+	$screen = get_current_screen();
+	if ( empty( $screen->post_type ) || 'shop_order' !== $screen->post_type ) return;
+	?>
+	<script>
+	(function(){
+		function ensure(sel){
+			var s = document.getElementById(sel);
+			if(!s) return;
+			var exists = Array.prototype.some.call(s.options, function(o){ return o.value === 'wctl_bulk_print_labels'; });
+			if(!exists){
+				var opt = document.createElement('option');
+				opt.value = 'wctl_bulk_print_labels';
+				opt.textContent = 'Print Thermal Labels';
+				s.appendChild(opt);
+			}
+		}
+		ensure('bulk-action-selector-top');
+		ensure('bulk-action-selector-bottom');
+	})();
+	</script>
+	<?php
+});
+
+/* -------- Endpoints: single & bulk -------- */
+
+add_action( 'admin_post_wctl_print_thermal_label', function () {
+	if ( empty( $_GET['order_id'] ) ) wp_die( esc_html__( 'Missing order ID.', 'woocommerce' ) );
+	$order_id = (int) $_GET['order_id'];
+
+	if ( ! current_user_can( 'edit_shop_orders' ) ) wp_die( esc_html__( 'Insufficient permissions.', 'woocommerce' ) );
+	if ( ! wp_verify_nonce( $_GET['_wpnonce'] ?? '', 'wctl_print_' . $order_id ) ) wp_die( esc_html__( 'Nonce verification failed.', 'woocommerce' ) );
+
+	$order = wc_get_order( $order_id );
+	if ( ! $order ) wp_die( esc_html__( 'Order not found.', 'woocommerce' ) );
+
+	$show_item_prices = (bool) apply_filters( 'wctl_show_prices_per_item', true );
+
+	nocache_headers();
+	header( 'Content-Type: text/html; charset=UTF-8' );
+	?>
+	<!doctype html><html <?php language_attributes(); ?>><head>
+	<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+	<title><?php echo esc_html( sprintf( 'Label #%s', $order->get_order_number() ) ); ?></title>
+	<?php wctl_echo_print_styles(); ?>
+	</head><body>
+	<?php wctl_echo_one_label_block( $order, $show_item_prices ); ?>
+	<p class="no-print" style="text-align:center;margin-top:10px;">
+		<button onclick="window.print()">Print</button>
+		<a href="<?php echo esc_url( admin_url('edit.php?post_type=shop_order') ); ?>" style="margin-left:8px;">Back to Orders</a>
+	</p>
+	<script>window.addEventListener('load',function(){setTimeout(function(){window.print();},60);});</script>
+	</body></html>
+	<?php
+	exit;
+});
+
+add_action( 'admin_post_wctl_bulk_print_thermal_labels', function () {
+	if ( empty( $_GET['order_ids'] ) ) wp_die( esc_html__( 'No orders selected.', 'woocommerce' ) );
+	$list = preg_replace( '/[^0-9,]/', '', (string) $_GET['order_ids'] );
+
+	if ( ! current_user_can( 'edit_shop_orders' ) ) wp_die( esc_html__( 'Insufficient permissions.', 'woocommerce' ) );
+	if ( ! wp_verify_nonce( $_GET['_wpnonce'] ?? '', 'wctl_bulk_print_' . $list ) ) wp_die( esc_html__( 'Nonce verification failed.', 'woocommerce' ) );
+
+	$ids = array_filter( array_map( 'intval', explode( ',', $list ) ) );
+	if ( empty( $ids ) ) wp_die( esc_html__( 'No valid orders.', 'woocommerce' ) );
+
+	$show_item_prices = (bool) apply_filters( 'wctl_show_prices_per_item', true );
+
+	nocache_headers();
+	header( 'Content-Type: text/html; charset=UTF-8' );
+	?>
+	<!doctype html><html <?php language_attributes(); ?>><head>
+	<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+	<title><?php esc_html_e('Thermal Labels','woocommerce'); ?></title>
+	<?php wctl_echo_print_styles(); ?>
+	</head><body>
+	<?php foreach ( $ids as $oid ) { $o = wc_get_order( $oid ); if ( $o ) wctl_echo_one_label_block( $o, $show_item_prices ); } ?>
+	<p class="no-print" style="text-align:center;margin-top:10px;">
+		<button onclick="window.print()">Print All</button>
+		<a href="<?php echo esc_url( admin_url('edit.php?post_type=shop_order') ); ?>" style="margin-left:8px;">Back to Orders</a>
+	</p>
+	<script>window.addEventListener('load',function(){setTimeout(function(){window.print();},80);});</script>
+	</body></html>
+	<?php
+	exit;
+});
+// Default to 58mm paper and tighter margins
+//add_filter('wctl_paper_width_mm', fn() => 58);
+//add_filter('wctl_page_margin_mm', fn() => 2);
+
+// Hide per-item prices (show only name × qty + grand total)
+//add_filter('wctl_show_prices_per_item', '__return_false');
