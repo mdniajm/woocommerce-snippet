@@ -1,0 +1,41 @@
+/**
+ * Strict checkout validation for Address, Phone, and State (District)
+ * Works with WooCommerce + Aero Checkout (WFACP) because it runs on core WC hook.
+ */
+add_action('woocommerce_checkout_process', function () {
+
+    // ---- Gather values safely ----
+    $shipping_address_1 = isset($_POST['shipping_address_1']) ? trim(wp_unslash($_POST['shipping_address_1'])) : '';
+    $shipping_state     = isset($_POST['shipping_state'])     ? trim(wp_unslash($_POST['shipping_state']))     : '';
+    $billing_phone      = isset($_POST['billing_phone'])      ? trim(wp_unslash($_POST['billing_phone']))      : '';
+
+    // ---- Address required ----
+    if ($shipping_address_1 === '') {
+        wc_add_notice(__('Please enter your full address.', 'woocommerce'), 'error');
+    } elseif (mb_strlen($shipping_address_1) < 5) {
+        wc_add_notice(__('Your address looks too short. Please provide a more complete address.', 'woocommerce'), 'error');
+    }
+
+    // ---- District/State required ----
+    if ($shipping_state === '') {
+        wc_add_notice(__('Please select your district.', 'woocommerce'), 'error');
+    }
+
+    // ---- Phone required + Bangladesh format sanity checks ----
+    if ($billing_phone === '') {
+        wc_add_notice(__('Please enter your phone number.', 'woocommerce'), 'error');
+    } else {
+        // If using intl-tel-input with separate dial code, the input may contain only local number.
+        // Normalize: strip whitespace and punctuation
+        $raw = preg_replace('/\D+/', '', $billing_phone);
+
+        // Accept either local 11-digit BD mobile (starts with 01...)  or full E.164 (+8801...)
+        $is_local_bd  = preg_match('/^01\d{9}$/', $raw);        // e.g. 017XXXXXXXX
+        $is_e164_bd   = preg_match('/^8801\d{9}$/', $raw);      // e.g. 88017XXXXXXXX
+
+        if (!$is_local_bd && !$is_e164_bd) {
+            wc_add_notice(__('Please enter a valid Bangladesh mobile number (e.g. 01XXXXXXXXX).', 'woocommerce'), 'error');
+        }
+    }
+
+});
