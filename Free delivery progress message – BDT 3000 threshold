@@ -1,0 +1,64 @@
+/**
+ * Free delivery notice (BDT 3000) for FunnelKit semi-cart + Woo fragments.
+ * Location: FunnelKit footer area (above Order Summary / CTA).
+ */
+if ( ! defined('WEM_FREE_DELIVERY_THRESHOLD') ) {
+    define('WEM_FREE_DELIVERY_THRESHOLD', 3000); // change if needed
+}
+
+/**
+ * Compute message HTML (before shipping, after discounts).
+ */
+function wem_fkcart_free_delivery_html() {
+    if ( is_admin() && ! wp_doing_ajax() ) return '';
+    if ( null === WC()->cart || WC()->cart->is_empty() ) return '';
+
+    // Totals: subtotal - discounts (ex tax). Adjust if you want to include tax.
+    $subtotal_ex_tax   = WC()->cart->get_subtotal();
+    $discount_total    = WC()->cart->get_discount_total();
+    $cart_total_ex_tax = max(0, $subtotal_ex_tax - $discount_total);
+
+    // If your threshold should include tax, uncomment next two lines:
+    // $tax_subtotal   = WC()->cart->get_subtotal_tax();
+    // $cart_total_ex_tax += max(0, $tax_subtotal - WC()->cart->get_discount_tax());
+
+    $remaining = max(0, WEM_FREE_DELIVERY_THRESHOLD - $cart_total_ex_tax);
+    $progress  = min(100, (int) round(($cart_total_ex_tax / WEM_FREE_DELIVERY_THRESHOLD) * 100));
+
+    ob_start(); ?>
+    <div id="wem-fkcart-free-delivery" class="wem-fkcart-free-delivery" style="margin:12px 0; padding:10px 12px; border-radius:8px; background:#f6f7fb; font-size:14px; line-height:1.4;">
+        <?php if ( $remaining <= 0 ) : ?>
+            <strong style="display:block; margin-bottom:6px;">You’ve unlocked FREE delivery! 🎉</strong>
+            <div style="height:6px; border-radius:999px; background:#e5e7eb; overflow:hidden;">
+                <span style="display:block; width:100%; height:100%; background:#16a34a;"></span>
+            </div>
+        <?php else : ?>
+            <strong style="display:block; margin-bottom:6px;">
+                Add products worth <?php echo wc_price($remaining); ?> more to get free delivery.
+            </strong>
+            <div style="height:6px; border-radius:999px; background:#e5e7eb; overflow:hidden;">
+                <span style="display:block; width:<?php echo esc_attr($progress); ?>%; height:100%; background:#2563eb;"></span>
+            </div>
+            <small style="display:block; margin-top:6px; opacity:.8;">Free delivery at <?php echo wc_price(WEM_FREE_DELIVERY_THRESHOLD); ?>.</small>
+        <?php endif; ?>
+    </div>
+    <?php
+    return ob_get_clean();
+}
+
+/**
+ * Inject into FunnelKit semi-cart (footer section above Order Summary / CTA).
+ * Your template shows: do_action( 'fkcart_after_coupon_section', $cart_settings );
+ */
+add_action('fkcart_after_coupon_section', function() {
+    echo wem_fkcart_free_delivery_html();
+}, 15);
+
+/**
+ * Ensure live updates when items are added/removed (Woo fragments).
+ * We return the wrapper so Woo can replace it inside the FunnelKit modal.
+ */
+add_filter('woocommerce_add_to_cart_fragments', function($fragments) {
+    $fragments['#wem-fkcart-free-delivery'] = wem_fkcart_free_delivery_html();
+    return $fragments;
+});
